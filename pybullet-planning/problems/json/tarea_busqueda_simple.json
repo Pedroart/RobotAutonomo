@@ -1,0 +1,56 @@
+{
+  "camera": {
+    "point": { "x": 1.0, "y": 0.0, "z": 1.0 },
+    "quat": { "x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0 }
+  },
+  "robots": [
+    {
+        "name": "robot",
+        "urdf": "models/pr2_description/pr2.urdf",
+        "point": { "x": 0, "y": 0, "z": 0 },
+        "quat": { "x": 0, "y": 0, "z": 0, "w": 1 }
+    }
+  ],
+
+  "bodies": [
+    {
+      "name": "objeto_a_buscar",
+      "path": "models/block.urdf",
+      "pose": [[0.6, 0.4, 0.8], [0, 0, 0, 1]]
+    },
+    {
+      "name": "mesa",
+      "path": "models/short_table.urdf",
+      "pose": [[0.6, 0.4, 0], [0, 0, 0, 1]]
+    },
+    {
+      "name": "objeto_entorno",
+      "path": "models/block.urdf",
+      "pose": [[0.6, 0.55, 0.8], [0, 0, 0, 1]]
+    }
+  ],
+  "task": {
+    "name": "tarea_busqueda_simple",
+    "object_names": ["objeto_a_buscar"],
+    "table_names": ["mesa"],
+    "sink_names": [],
+    "stove_names": [],
+    "floor_object_names": [],
+    "grasp_types": ["top"],
+    "goal_config": null,
+    "goal_holding": null,
+    "goal_stackings": {},
+    "goal_regions": {
+      "objeto_a_buscar": "zona_meta"
+    },
+    "goal_cleaned": [],
+    "goal_cooked": [],
+    "regions": [
+      {
+        "name": "zona_meta",
+        "pose": [[0.2, -0.3, 0.8], [0, 0, 0, 1]],
+        "extents": [0.1, 0.1, 0.02]
+      }
+    ]
+  }
+}
