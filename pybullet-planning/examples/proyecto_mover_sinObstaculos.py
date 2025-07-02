@@ -8,11 +8,12 @@ from pybullet_tools.utils import (
     Pose, Point, BLOCK_URDF, DRAKE_IIWA_URDF, add_data_path,
     quat_from_euler, get_link_pose, point_from_pose, quat_from_pose,
     multiply, get_image, stable_z, WorldSaver, update_state, disable_real_time,
-    draw_global_system, wait_if_gui
+    draw_global_system, wait_if_gui, get_joint_positions, set_joint_positions, get_movable_joints,
+    inverse_kinematics, plan_direct_joint_motion
 )
 
 from pybullet_tools.kuka_primitives import (
-    BodyPose, BodyConf, Command,
+    BodyPose, BodyConf, Command,BodyPath,
     get_grasp_gen, get_ik_fn,
     get_free_motion_gen, get_holding_motion_gen
 )
@@ -25,7 +26,7 @@ def total_path_length(command: Command):
 
 class EnfermeriaRobot:
     def __init__(self):
-
+        
         self.camera_frame = None
         self.camera_lock = threading.Lock()
         self.camera_thread_running = True
@@ -51,7 +52,7 @@ class EnfermeriaRobot:
         set_pose(self.estanteria, Pose(Point(x=-0.5, y=1, z=0.0)))
 
         self.objetos = []
-        for i in range(3):
+        for i in range(1):
             block = load_model(BLOCK_URDF, fixed_base=False)
             x_offset = 0.5
             y_offset = (i - 1) * 0.3
@@ -209,20 +210,65 @@ class EnfermeriaRobot:
         return best_command
 
 
+    def plan_and_execute_motion_to_pose(self, target_pose: Pose):
+        movable_joints = get_movable_joints(self.robot)
+        current_conf = BodyConf(self.robot)
+        
+        saved_world = WorldSaver()
 
-    def execute_with_camera_update(self, command: Command, time_step=0.01):
-        for bp in command.body_paths:
-            # Filtrar solo BodyPath válidos (que tengan atributo path)
-            if not hasattr(bp, 'path') or not hasattr(bp, 'body'):
-                continue
-            body = bp.body
-            for conf in bp.path:
-                for j, q in enumerate(conf):
-                    p.resetJointState(body, j, q)
-                #self.update_kinect()
-                #self.show_camera_view()  # opcional
-                p.stepSimulation()
-                time.sleep(time_step)
+        # IK sin grasp
+        q_target = inverse_kinematics(self.robot, self.end_effector_index, target_pose)
+        if q_target is None:
+            print("❌ IK falló")
+            return
+
+        path = plan_direct_joint_motion(self.robot, movable_joints, q_target, obstacles=[self.floor, self.mesa, self.cama, self.estanteria])
+        if path is None:
+            print("❌ Planificación de movimiento fallida")
+            return
+        saved_world.restore()
+        update_state()
+        command = Command([BodyPath(self.robot, path)])
+        self.execute_with_camera_update(command.refine(num_steps=30), time_step=0.05)
+
+    def plan_free_motion_to_object(self, obj, destino_pose):
+        # Obtener IK y planificación sin grasp
+        ik_fn = get_ik_fn(self.robot, fixed=[self.floor, self.mesa, self.cama, self.estanteria], teleport=False)
+        free_motion_fn = get_free_motion_gen(self.robot, fixed=[self.floor, self.mesa, self.cama, obj], teleport=False)
+
+        pose0 = BodyPose(obj)  # Pose actual del objeto
+        conf0 = BodyConf(self.robot)  # Configuración actual del robot
+        saved_world = WorldSaver()
+
+        best_command = None
+        best_length = float('inf')
+
+        saved_world.restore()
+        pose0.assign()
+
+        # No grasp
+        result1 = ik_fn(obj, pose0, grasp=None)
+        if result1 is None:
+            print("❌ IK falló")
+            return None
+        conf1, path_to_target = result1
+
+        result2 = free_motion_fn(conf0, conf1)
+        if result2 is None:
+            print("❌ Planificación falló")
+            return None
+        path_free, = result2
+
+        # Crear comando solo con movimiento libre
+        command = Command(path_free.body_paths + path_to_target.body_paths)
+        steps = total_path_length(command)
+
+        if steps < best_length:
+            best_length = steps
+            best_command = command
+
+        return best_command
+
 
     def pick_and_place(self, obj_index, destino_pose):
         objeto = self.objetos[obj_index]
@@ -240,6 +286,45 @@ class EnfermeriaRobot:
         #self.update_kinect()
 
 
+    def ejecutar_trayectoria_cartesiana(self, poses: list[Pose], delay: float = 0.02, steps_per_segment: int = 100):
+        """
+        Ejecuta una trayectoria cartesiana suavemente, interpolando entre configuraciones.
+        """
+        from pybullet_tools.utils import (
+            get_movable_joints, draw_pose, remove_handles
+        )
+
+        joint_path = []
+        handles = []
+        joints = get_movable_joints(self.robot)
+
+        # Resolver IK para cada pose
+        for i, pose in enumerate(poses):
+            q = inverse_kinematics(self.robot, self.end_effector_index, pose)
+            if q is None:
+                print(f"❌ IK falló para pose {i}")
+                continue
+            joint_path.append(q)
+            handles.append(draw_pose(pose, length=0.1))
+
+        if len(joint_path) < 2:
+            print("❌ Se necesitan al menos 2 configuraciones.")
+            return
+
+        print(f"✅ Ejecutando trayectoria con interpolación entre {len(joint_path)} poses...")
+
+        # Ejecutar interpolando entre cada par consecutivo de configuraciones
+        for i in range(len(joint_path) - 1):
+            q_start = joint_path[i]
+            q_end = joint_path[i + 1]
+            for alpha in np.linspace(0, 1, steps_per_segment):
+                q_interp = interpolate_configs(q_start, q_end, alpha)
+                set_joint_positions(self.robot, joints, q_interp)
+                p.stepSimulation()
+                time.sleep(delay)
+
+        remove_handles(handles)
+
 
 
     def move_object_to(self, obj_index, pose):
@@ -252,27 +337,38 @@ class EnfermeriaRobot:
         wait_if_gui()
         disconnect()
 
+def quat_from_euler_safe(euler):
+    if not isinstance(euler, (list, tuple)) or len(euler) != 3:
+        raise ValueError("❌ 'euler' debe tener 3 valores: [roll, pitch, yaw]")
+    return p.getQuaternionFromEuler(euler)
+
+def interpolate_configs(q1, q2, alpha):
+    """
+    Interpola línea recta entre dos configuraciones articulares.
+    q1, q2: listas de ángulos articulares.
+    alpha: valor entre 0 y 1.
+    """
+    return [(1 - alpha) * a + alpha * b for a, b in zip(q1, q2)]
+
 
 if __name__ == '__main__':
+    from pybullet_tools.utils import Pose, Point, quat_from_euler
+    from math import pi
+
     robot = EnfermeriaRobot()
+    # esperar entorno...
     
-
-    # Esperar a que PyBullet cargue todo
-    print("🕒 Esperando carga del entorno...")
-    for _ in range(10):
-        #robot.show_camera_view()
-        p.stepSimulation()
-        time.sleep(0.01)  # 1s total
-
+    from math import cos, sin, pi
+    poses = []
+    radio = 0.5
+    q = [0, pi/2, 0]
+    for t in np.linspace(0, 2*pi, 20):
+        x = 0 + radio * cos(t)
+        y = 0 + radio * sin(t)
+        z = 1.2 + 0.01 * t  # leve subida
+        poses.append(Pose(Point(x, y, z), q))
     
-    robot.start_camera_loop()           # Captura frames
-    robot.start_camera_display_loop()   # Muestra frames en tiempo real
-
-    time.sleep(1.0) 
-    update_state()
-
-    destino = Pose(Point(x=0.5, y=0.5, z=0.73))
-    robot.pick_and_place(obj_index=0, destino_pose=destino)
-
+    robot.ejecutar_trayectoria_cartesiana(poses)
     robot.shutdown()
+
 
