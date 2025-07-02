@@ -61,13 +61,13 @@ class EnfermeriaRobot:
         set_pose(self.pedestal, Pose(Point(x=0.0, y=0.0, z=0.5)))
 
         self.mesa = load_model('models/table_collision/table.urdf', fixed_base=True)
-        set_pose(self.mesa, Pose(Point(x=1.1, y=0.0, z=0.0), [0, 0, pi/2]))
+        set_pose(self.mesa, Pose(Point(x=1, y=0.0, z=0.0), [0, 0, pi/2]))
 
         self.cama = load_model('models/hospital_bed.urdf', fixed_base=True)
         set_pose(self.cama, Pose(Point(x=-1.1, y=-1.8, z=0.0), [0, 0, -pi/2]))
 
         self.estanteria = load_model('models/bookcase.urdf', fixed_base=True)
-        set_pose(self.estanteria, Pose(Point(x=-0.5, y=1, z=0.0)))
+        set_pose(self.estanteria, Pose(Point(x=-0.5, y=0.8, z=0.0)))
 
         self.objetos = []
         for i in range(3):
@@ -187,8 +187,8 @@ class EnfermeriaRobot:
 
         grasp_gen = get_grasp_gen(self.robot, 'top')
         ik_fn = get_ik_fn(self.robot, fixed=[self.floor, self.mesa, self.cama, self.estanteria], teleport=False)
-        free_motion_fn = get_free_motion_gen(self.robot, fixed=[self.floor, self.mesa, self.cama, obj], teleport=False)
-        holding_motion_fn = get_holding_motion_gen(self.robot, fixed=[self.floor, self.mesa, self.cama], teleport=False)
+        free_motion_fn = get_free_motion_gen(self.robot, fixed=[self.floor, self.mesa, self.cama, obj, self.estanteria], teleport=False)
+        holding_motion_fn = get_holding_motion_gen(self.robot, fixed=[self.floor, self.mesa, self.cama, self.estanteria], teleport=False)
 
         pose0 = BodyPose(obj)
         conf0 = BodyConf(self.robot)
@@ -380,8 +380,8 @@ class EnfermeriaRobot:
 
         grasp_gen = get_grasp_gen(self.robot, 'top')
         ik_fn = get_ik_fn(self.robot, fixed=[*otros_objetos, self.mesa, self.cama, self.estanteria], teleport=False)
-        free_motion_fn = get_free_motion_gen(self.robot, fixed=[*otros_objetos,self.mesa, self.cama, obj], teleport=False)
-        holding_motion_fn = get_holding_motion_gen(self.robot, fixed=[*otros_objetos, self.mesa, self.cama], teleport=True)
+        free_motion_fn = get_free_motion_gen(self.robot, fixed=[*otros_objetos,self.mesa, self.cama, obj,self.estanteria], teleport=False)
+        holding_motion_fn = get_holding_motion_gen(self.robot, fixed=[*otros_objetos, self.mesa, self.cama,self.estanteria], teleport=False)
 
         pose0 = BodyPose(obj)
         conf0 = BodyConf(self.robot)
@@ -503,7 +503,7 @@ if __name__ == '__main__':
     time.sleep(1.0) 
     update_state()
 
-    destino = Pose(Point(x=0.8, y=-0.2, z=0.9))
+    destino = Pose(Point(x=-0.34, y=0.75, z=0.95))
     robot.pick_and_place(obj_index=2, destino_pose=destino)
 
     robot.shutdown()
