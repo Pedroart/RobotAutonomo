@@ -375,10 +375,13 @@ class EnfermeriaRobot:
 
         draw_pose(destino_pose, length=0.2)
 
+        otros_objetos = [o for o in self.objetos if o != obj]
+
+
         grasp_gen = get_grasp_gen(self.robot, 'top')
-        ik_fn = get_ik_fn(self.robot, fixed=[self.objetos, self.mesa, self.cama, self.estanteria], teleport=False)
-        free_motion_fn = get_free_motion_gen(self.robot, fixed=[self.objetos,self.mesa, self.cama, obj], teleport=False)
-        holding_motion_fn = get_holding_motion_gen(self.robot, fixed=[self.objetos, self.mesa, self.cama], teleport=False)
+        ik_fn = get_ik_fn(self.robot, fixed=[*otros_objetos, self.mesa, self.cama, self.estanteria], teleport=False)
+        free_motion_fn = get_free_motion_gen(self.robot, fixed=[*otros_objetos,self.mesa, self.cama, obj], teleport=False)
+        holding_motion_fn = get_holding_motion_gen(self.robot, fixed=[*otros_objetos, self.mesa, self.cama], teleport=True)
 
         pose0 = BodyPose(obj)
         conf0 = BodyConf(self.robot)
@@ -500,7 +503,7 @@ if __name__ == '__main__':
     time.sleep(1.0) 
     update_state()
 
-    destino = Pose(Point(x=0.5, y=-0.3, z=0.7))
+    destino = Pose(Point(x=0.8, y=-0.2, z=0.9))
     robot.pick_and_place(obj_index=2, destino_pose=destino)
 
     robot.shutdown()
