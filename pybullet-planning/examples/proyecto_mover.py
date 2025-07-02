@@ -17,9 +17,14 @@ from pybullet_tools.kuka_primitives import (
     get_free_motion_gen, get_holding_motion_gen
 )
 
+import threading
 
 class EnfermeriaRobot:
     def __init__(self):
+
+        self.camera_frame = None
+        self.camera_lock = threading.Lock()
+        self.camera_thread_running = True
         connect(use_gui=True)
         disable_real_time()
         add_data_path()
@@ -57,8 +62,29 @@ class EnfermeriaRobot:
             p.resetJointState(self.robot, i, q)
 
         self.end_effector_index = 9
-        self.update_kinect()
+        #self.update_kinect()
+        '''
+        self.kinect_model = load_model('models/kinect/kinect.urdf', fixed_base=False)
+    
+        # Desactivar colisiones y hacer sin masa
+        p.changeDynamics(self.kinect_model, -1, mass=0, lateralFriction=0, spinningFriction=0, rollingFriction=0)
+        p.setCollisionFilterGroupMask(self.kinect_model, -1, 0, 0)
 
+
+        self.kinect_constraint = p.createConstraint(
+            parentBodyUniqueId=self.robot,
+            parentLinkIndex=self.end_effector_index,
+            childBodyUniqueId=self.kinect_model,
+            childLinkIndex=-1,
+            jointType=p.JOINT_FIXED,
+            jointAxis=[0, 0, 0],
+            parentFramePosition=[0, 0, 0.1],  # offset desde el end effector
+            childFramePosition=[0, 0, 0]      # origen del modelo Kinect
+        )
+        '''
+
+    
+    '''
     def update_kinect(self):
         cam_pose = get_link_pose(self.robot, self.end_effector_index)
         offset_pose = Pose(Point(x=0, y=0, z=0.1))
@@ -68,6 +94,7 @@ class EnfermeriaRobot:
         else:
             self.kinect_model = load_model('models/kinect/kinect.urdf', fixed_base=True)
             set_pose(self.kinect_model, kinect_pose)
+    '''
 
     def show_camera_view(self):
         cam_pose = get_link_pose(self.robot, self.end_effector_index)
@@ -88,6 +115,47 @@ class EnfermeriaRobot:
 
         cv2.imshow("Vista Kinect", rgb_img)
         cv2.waitKey(1)
+
+    def start_camera_loop(self):
+        def camera_loop():
+            while self.camera_thread_running:
+                cam_pose = get_link_pose(self.robot, self.end_effector_index)
+                cam_pos = point_from_pose(cam_pose)
+                cam_rot = quat_from_pose(cam_pose)
+
+                rot_matrix = p.getMatrixFromQuaternion(cam_rot)
+                cam_forward = [rot_matrix[0], rot_matrix[3], rot_matrix[6]]
+                target_pos = [cam_pos[i] + 0.2 * cam_forward[i] for i in range(3)]
+
+                image = get_image(camera_pos=cam_pos, target_pos=target_pos, vertical_fov=20.0)
+                rgb_img = image.rgbPixels.astype(np.uint8)
+
+                if rgb_img.shape[-1] == 4:
+                    rgb_img = rgb_img[:, :, :3]
+                    rgb_img = cv2.cvtColor(rgb_img, cv2.COLOR_RGB2BGR)
+
+                with self.camera_lock:
+                    self.camera_frame = rgb_img
+
+                time.sleep(0.1)
+
+        threading.Thread(target=camera_loop, daemon=True).start()
+
+    def start_camera_display_loop(self):
+        def display_loop():
+            while self.camera_thread_running:
+                with self.camera_lock:
+                    frame = self.camera_frame.copy() if self.camera_frame is not None else None
+
+                if frame is not None:
+                    cv2.imshow("Vista en Tiempo Real", frame)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        self.camera_thread_running = False
+                        break
+
+                time.sleep(0.05)
+
+        threading.Thread(target=display_loop, daemon=True).start()
 
 
     def plan_pick_and_place(self, obj, destino_pose):
@@ -134,14 +202,10 @@ class EnfermeriaRobot:
             for conf in bp.path:
                 for j, q in enumerate(conf):
                     p.resetJointState(body, j, q)
-                self.update_kinect()
-                self.show_camera_view()  # opcional
+                #self.update_kinect()
+                #self.show_camera_view()  # opcional
                 p.stepSimulation()
                 time.sleep(time_step)
-
-
-
-
 
     def pick_and_place(self, obj_index, destino_pose):
         objeto = self.objetos[obj_index]
@@ -156,7 +220,7 @@ class EnfermeriaRobot:
         #self.execute_with_camera_update(command)
 
         command.refine(num_steps=10).execute(time_step=0.1)
-
+        #self.update_kinect()
 
 
 
@@ -166,9 +230,11 @@ class EnfermeriaRobot:
             set_pose(self.objetos[obj_index], pose)
 
     def shutdown(self):
+        self.camera_thread_running = False
         cv2.destroyAllWindows()
         wait_if_gui()
         disconnect()
+
 
 if __name__ == '__main__':
     robot = EnfermeriaRobot()
@@ -177,9 +243,13 @@ if __name__ == '__main__':
     # Esperar a que PyBullet cargue todo
     print("🕒 Esperando carga del entorno...")
     for _ in range(10):
-        robot.show_camera_view()
+        #robot.show_camera_view()
         p.stepSimulation()
         time.sleep(0.01)  # 1s total
+
+    
+    robot.start_camera_loop()           # Captura frames
+    robot.start_camera_display_loop()   # Muestra frames en tiempo real
 
     time.sleep(1.0) 
     update_state()
