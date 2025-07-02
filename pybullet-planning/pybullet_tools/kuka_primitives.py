@@ -2,7 +2,7 @@ import time
 
 from itertools import count
 
-from .pr2_utils import get_top_grasps
+from .pr2_utils import get_top_grasps,get_side_grasps
 from .utils import get_pose, set_pose, get_movable_joints, \
     set_joint_positions, add_fixed_constraint, enable_real_time, disable_real_time, joint_controller, \
     enable_gravity, get_refine_fn, wait_for_duration, link_from_name, get_body_name, sample_placement, \
@@ -15,6 +15,10 @@ from .utils import get_pose, set_pose, get_movable_joints, \
 GRASP_INFO = {
     'top': GraspInfo(lambda body: get_top_grasps(body, under=True, tool_pose=Pose(), max_width=INF,  grasp_length=0),
                      approach_pose=Pose(0.1*Point(z=1))),
+    'side': GraspInfo(
+        lambda body: get_side_grasps(body, under=False, tool_pose=Pose(), max_width=INF, grasp_length=0),
+        approach_pose=Pose(0.1 * Point(x=1))
+    ),
 }
 
 TOOL_FRAMES = {

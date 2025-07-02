@@ -20,6 +20,9 @@ from pybullet_tools.kuka_primitives import (
 
 import threading
 
+import matplotlib.pyplot as plt
+
+
 def total_path_length(command: Command):
     return sum(len(bp.path) for bp in command.body_paths if hasattr(bp, 'path'))
 
@@ -52,7 +55,7 @@ class EnfermeriaRobot:
         set_pose(self.estanteria, Pose(Point(x=-0.5, y=1, z=0.0)))
 
         self.objetos = []
-        for i in range(1):
+        for i in range(0):
             block = load_model(BLOCK_URDF, fixed_base=False)
             x_offset = 0.5
             y_offset = (i - 1) * 0.3
@@ -285,11 +288,7 @@ class EnfermeriaRobot:
         command.refine(num_steps=10).execute(time_step=0.1)
         #self.update_kinect()
 
-
     def ejecutar_trayectoria_cartesiana(self, poses: list[Pose], delay: float = 0.02, steps_per_segment: int = 100):
-        """
-        Ejecuta una trayectoria cartesiana suavemente, interpolando entre configuraciones.
-        """
         from pybullet_tools.utils import (
             get_movable_joints, draw_pose, remove_handles
         )
@@ -297,23 +296,22 @@ class EnfermeriaRobot:
         joint_path = []
         handles = []
         joints = get_movable_joints(self.robot)
+        ee_positions = []
+        joint_angles = []
 
-        # Resolver IK para cada pose
         for i, pose in enumerate(poses):
             q = inverse_kinematics(self.robot, self.end_effector_index, pose)
             if q is None:
                 print(f"❌ IK falló para pose {i}")
                 continue
             joint_path.append(q)
-            handles.append(draw_pose(pose, length=0.1))
+            handles.extend(draw_pose(pose, length=0.1))  # ← ← ← CORRECTO: aplana la lista
+
 
         if len(joint_path) < 2:
             print("❌ Se necesitan al menos 2 configuraciones.")
             return
 
-        print(f"✅ Ejecutando trayectoria con interpolación entre {len(joint_path)} poses...")
-
-        # Ejecutar interpolando entre cada par consecutivo de configuraciones
         for i in range(len(joint_path) - 1):
             q_start = joint_path[i]
             q_end = joint_path[i + 1]
@@ -323,9 +321,43 @@ class EnfermeriaRobot:
                 p.stepSimulation()
                 time.sleep(delay)
 
+                # 🔵 Guardar posición del end effector
+                pos, _ = get_link_pose(self.robot, self.end_effector_index)
+                ee_positions.append(pos)
+                joint_angles.append(q_interp)
+
         remove_handles(handles)
 
+        if not ee_positions:
+            print("⚠️ No se registraron posiciones del efector final.")
+            return
 
+
+        # 🔵 Graficar posición x, y, z
+        xs, ys, zs = zip(*ee_positions)
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+        ax.plot(xs, ys, zs, marker='o')
+        ax.set_title("Trayectoria del Efector Final")
+        ax.set_xlabel("X [m]")
+        ax.set_ylabel("Y [m]")
+        ax.set_zlabel("Z [m]")
+        plt.savefig("trayectoria_ee.png")
+        plt.close()
+
+        # 🔵 Graficar ángulos articulares (opcional)
+        joint_angles_np = np.array(joint_angles)
+        plt.figure()
+        for i in range(joint_angles_np.shape[1]):
+            plt.plot(joint_angles_np[:, i], label=f'Joint {i+1}')
+        plt.title("Ángulos Articulares")
+        plt.xlabel("Paso")
+        plt.ylabel("Ángulo [rad]")
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+        plt.savefig("angulos_articulares.png")
+        plt.close()
 
     def move_object_to(self, obj_index, pose):
         if 0 <= obj_index < len(self.objetos):
@@ -350,6 +382,15 @@ def interpolate_configs(q1, q2, alpha):
     """
     return [(1 - alpha) * a + alpha * b for a, b in zip(q1, q2)]
 
+from pybullet_tools.utils import interpolate_poses
+
+def generar_trayectoria_ida_y_vuelta(pose_inicio, pose_final, pasos=10):
+    """
+    Genera una lista de poses desde pose_inicio a pose_final y de regreso.
+    """
+    trayecto_ida = list(interpolate_poses(pose_inicio, pose_final, pos_step_size=None, num_steps=pasos))
+    trayecto_vuelta = trayecto_ida[::-1][1:]  # omitimos duplicar el punto final
+    return trayecto_ida + trayecto_vuelta
 
 if __name__ == '__main__':
     from pybullet_tools.utils import Pose, Point, quat_from_euler
@@ -357,18 +398,25 @@ if __name__ == '__main__':
 
     robot = EnfermeriaRobot()
     # esperar entorno...
+
+        # Esperar a que PyBullet cargue todo
+    print("🕒 Esperando carga del entorno...")
+    for _ in range(20):
+        #robot.show_camera_view()
+        p.stepSimulation()
+        time.sleep(0.1)  # 1s total
+
     
     from math import cos, sin, pi
     poses = []
     radio = 0.5
     q = [0, pi/2, 0]
-    for t in np.linspace(0, 2*pi, 20):
-        x = 0 + radio * cos(t)
-        y = 0 + radio * sin(t)
-        z = 1.2 + 0.01 * t  # leve subida
-        poses.append(Pose(Point(x, y, z), q))
+    poses.append(Pose(Point(0.5, -0.3, 1.2), q))
+    poses.append(Pose(Point(0.5, 0.6, 1.2), q))
+    
     
     robot.ejecutar_trayectoria_cartesiana(poses)
+    input("Presiona ENTER para cerrar...")  # ← Espera antes de cerrar
     robot.shutdown()
 
 
