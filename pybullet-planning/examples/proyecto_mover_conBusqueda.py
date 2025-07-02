@@ -8,7 +8,8 @@ from pybullet_tools.utils import (
     Pose, Point, BLOCK_URDF, DRAKE_IIWA_URDF, add_data_path,
     quat_from_euler, get_link_pose, point_from_pose, quat_from_pose,
     multiply, get_image, stable_z, WorldSaver, update_state, disable_real_time,
-    draw_global_system, wait_if_gui, draw_pose
+    draw_global_system, wait_if_gui, draw_pose, inverse_kinematics, plan_direct_joint_motion,
+    set_joint_positions, get_movable_joints,
 )
 
 from pybullet_tools.kuka_primitives import (
@@ -40,6 +41,13 @@ def try_multiple_orientations(obj, base_position, grasp, ik_fn, num_angles=20):
     print("❌ No se logró ninguna IK con rotaciones")
     return None
 
+def interpolate_configs(q1, q2, alpha):
+    """
+    Interpola línea recta entre dos configuraciones articulares.
+    q1, q2: listas de ángulos articulares.
+    alpha: valor entre 0 y 1.
+    """
+    return [(1 - alpha) * a + alpha * b for a, b in zip(q1, q2)]
 
 
 class EnfermeriaRobot:
@@ -61,7 +69,7 @@ class EnfermeriaRobot:
         set_pose(self.pedestal, Pose(Point(x=0.0, y=0.0, z=0.5)))
 
         self.mesa = load_model('models/table_collision/table.urdf', fixed_base=True)
-        set_pose(self.mesa, Pose(Point(x=1, y=0.0, z=0.0), [0, 0, pi/2]))
+        set_pose(self.mesa, Pose(Point(x=0.8, y=0.0, z=0.0), [0, 0, pi/2]))
 
         self.cama = load_model('models/hospital_bed.urdf', fixed_base=True)
         set_pose(self.cama, Pose(Point(x=-1.1, y=-1.8, z=0.0), [0, 0, -pi/2]))
@@ -70,11 +78,17 @@ class EnfermeriaRobot:
         set_pose(self.estanteria, Pose(Point(x=-0.5, y=0.8, z=0.0)))
 
         self.objetos = []
+
+        colores = [(1, 0, 0, 1),  # rojo
+           (0, 1, 0, 1),  # verde
+           (0, 0, 1, 1)]  # azul
+
         for i in range(3):
             block = load_model(BLOCK_URDF, fixed_base=False)
             x_offset = 0.5
             y_offset = (i - 1) * 0.3
             set_pose(block, Pose(Point(x=x_offset, y=y_offset, z=0.73)))
+            p.changeVisualShape(block, -1, rgbaColor=colores[i])
             self.objetos.append(block)
 
     def _setup_robot(self):
@@ -84,7 +98,7 @@ class EnfermeriaRobot:
         for i, q in enumerate(joint_positions, start=1):
             p.resetJointState(self.robot, i, q)
 
-        self.end_effector_index = 9
+        self.end_effector_index = 8
         #self.update_kinect()
         '''
         self.kinect_model = load_model('models/kinect/kinect.urdf', fixed_base=False)
@@ -150,7 +164,7 @@ class EnfermeriaRobot:
                 cam_forward = [rot_matrix[0], rot_matrix[3], rot_matrix[6]]
                 target_pos = [cam_pos[i] + 0.2 * cam_forward[i] for i in range(3)]
 
-                image = get_image(camera_pos=cam_pos, target_pos=target_pos, vertical_fov=20.0)
+                image = get_image(camera_pos=cam_pos, target_pos=target_pos, vertical_fov=20.0, near=0.1)
                 rgb_img = image.rgbPixels.astype(np.uint8)
 
                 if rgb_img.shape[-1] == 4:
@@ -160,23 +174,53 @@ class EnfermeriaRobot:
                 with self.camera_lock:
                     self.camera_frame = rgb_img
 
-                time.sleep(0.1)
+                time.sleep(0.01)
 
         threading.Thread(target=camera_loop, daemon=True).start()
 
+
+    def detectar_cuadrados(self, mask, color_name, frame, color_bgr):
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        
+        for cnt in contours:
+            if len(cnt) < 4 or cv2.contourArea(cnt) < 1500:
+                continue  # Ignora contornos pequeños o triviales
+
+            cv2.drawContours(frame, [cnt], -1, color_bgr, 2)
+            x, y = cnt[0][0]
+            cv2.putText(frame, color_name, (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color_bgr, 1)
+
+
+
     def start_camera_display_loop(self):
         def display_loop():
+            # Rangos HSV de colores
+            lower_red1 = np.array([0, 100, 100])
+            upper_red1 = np.array([10, 255, 255])
+            lower_green = np.array([40, 70, 70])
+            upper_green = np.array([80, 255, 255])
+
             while self.camera_thread_running:
                 with self.camera_lock:
                     frame = self.camera_frame.copy() if self.camera_frame is not None else None
 
-                if frame is not None:
-                    cv2.imshow("Vista en Tiempo Real", frame)
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        self.camera_thread_running = False
-                        break
+                    if frame is not None:
 
-                time.sleep(0.05)
+                        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+                        mask_red1 = cv2.inRange(hsv, lower_red1, upper_red1)
+                        mask_green = cv2.inRange(hsv, lower_green, upper_green)
+
+                        self.detectar_cuadrados(mask_red1, "Rojo", frame, (0, 0, 255))
+                        self.detectar_cuadrados(mask_green, "Verde", frame, (0, 255, 0))
+
+                        cv2.imshow("Vista en Tiempo Real", frame)
+
+                        if cv2.waitKey(1) & 0xFF == ord('q'):
+                            self.camera_thread_running = False
+                            break
+
+                    time.sleep(0.05)
 
         threading.Thread(target=display_loop, daemon=True).start()
 
@@ -485,27 +529,82 @@ class EnfermeriaRobot:
         disconnect()
 
 
-if __name__ == '__main__':
-    robot = EnfermeriaRobot()
-    
+    def ejecutar_trayectoria_cartesiana(self, poses: list[Pose], delay: float = 2, steps_per_segment: int = 10):
+        from pybullet_tools.utils import (
+            get_movable_joints, draw_pose, remove_handles
+        )
 
-    # Esperar a que PyBullet cargue todo
+        joint_path = []
+        handles = []
+        joints = get_movable_joints(self.robot)
+        ee_positions = []
+        joint_angles = []
+
+        for i, pose in enumerate(poses):
+            q = inverse_kinematics(self.robot, self.end_effector_index, pose)
+            if q is None:
+                print(f"❌ IK falló para pose {i}")
+                continue
+            joint_path.append(q)
+            handles.extend(draw_pose(pose, length=0.1))  # ← ← ← CORRECTO: aplana la lista
+
+
+        if len(joint_path) < 2:
+            print("❌ Se necesitan al menos 2 configuraciones.")
+            return
+
+        for i in range(len(joint_path) - 1):
+            q_start = joint_path[i]
+            q_end = joint_path[i + 1]
+            for alpha in np.linspace(0, 1, steps_per_segment):
+                q_interp = interpolate_configs(q_start, q_end, alpha)
+                set_joint_positions(self.robot, joints, q_interp)
+                p.stepSimulation()
+                time.sleep(delay)
+
+                # 🔵 Guardar posición del end effector
+                pos, _ = get_link_pose(self.robot, self.end_effector_index)
+                ee_positions.append(pos)
+                joint_angles.append(q_interp)
+
+        remove_handles(handles)
+
+        if not ee_positions:
+            print("⚠️ No se registraron posiciones del efector final.")
+            return
+
+
+
+if __name__ == '__main__':
+    from pybullet_tools.utils import Pose, Point, quat_from_euler
+    from math import pi
+
+    robot = EnfermeriaRobot()
+    # esperar entorno...
+
+        # Esperar a que PyBullet cargue todo
     print("🕒 Esperando carga del entorno...")
+
+    robot.start_camera_loop()           # Captura frames
+    robot.start_camera_display_loop()   # Muestra frames en tiempo real
+
+
     for _ in range(30):
         #robot.show_camera_view()
         p.stepSimulation()
         time.sleep(0.1)  # 1s total
 
+
+    from math import cos, sin, pi
+    poses = []
+    radio = 0.5
+    q = [0, pi/2, 0]
+    poses.append(Pose(Point(0.5, -0.6, 1.4), q))
+    poses.append(Pose(Point(0.5, 0.6, 1.4), q))
     
-    robot.start_camera_loop()           # Captura frames
-    robot.start_camera_display_loop()   # Muestra frames en tiempo real
-
-    time.sleep(1.0) 
-    update_state()
-
-    destino = Pose(Point(x=-0.3, y=0.7, z=1))
-    robot.pick_and_place(obj_index=2, destino_pose=destino)
-
- 
+    
+    robot.ejecutar_trayectoria_cartesiana(poses)
+    input("Presiona ENTER para cerrar...")  # ← Espera antes de cerrar
     robot.shutdown()
+
 
